@@ -11,7 +11,10 @@ FastAPI webhook server that handles:
 
 import os
 import json
-import subprocess
+import smtplib
+import logging
+from email.mime.text import MIMEText
+from email.mime.multipart import MIMEMultipart
 import psycopg2
 import psycopg2.extras
 from datetime import datetime, timezone
@@ -25,6 +28,13 @@ INTERNAL_EMAIL = "robenedwan@gmail.com"
 COMPANY_NAME = "ECO Technology Environmental Protection Services LLC"
 COMPANY_PHONE = "+971 52 223 3989"
 WEBSITE = "https://binz2008-star.github.io/eco-environmental"
+
+# Gmail SMTP config (App Password)
+GMAIL_USER = "robenedwan@gmail.com"
+GMAIL_APP_PASSWORD = "rvyfwpsymfxgxprc"  # ECO Pipeline SMTP app password
+
+logging.basicConfig(level=logging.INFO, filename="/tmp/webhook.log",
+                    format="%(asctime)s %(levelname)s %(message)s")
 
 app = FastAPI(title="ECO Technology Lead Pipeline", version="2.0")
 
@@ -109,27 +119,27 @@ def store_form_submission(data: dict, lead_id: int):
         conn.close()
 
 
-# ─── Email helpers (via Gmail MCP) ─────────────────────────────────────────────
-def send_email_via_mcp(to: str, subject: str, body: str):
-    """Send email using Gmail MCP CLI."""
-    # Gmail MCP requires: {messages: [{to: [...], subject: str, content: str}]}
-    payload = json.dumps({
-        "messages": [{
-            "to": [to],
-            "subject": subject,
-            "content": body
-        }]
-    })
-    result = subprocess.run(
-        ["manus-mcp-cli", "tool", "call", "gmail_send_messages",
-         "--server", "gmail", "--input", payload],
-        capture_output=True, text=True, timeout=60
-    )
-    success = result.returncode == 0 and "error" not in result.stdout.lower()
-    if not success:
-        import logging
-        logging.warning(f"Email send failed: {result.stdout[:200]} {result.stderr[:200]}")
-    return success
+# ─── Email helpers (SMTP via Gmail App Password) ──────────────────────────────
+def send_email_via_smtp(to: str, subject: str, body: str) -> bool:
+    """Send email via Gmail SMTP using App Password."""
+    try:
+        msg = MIMEMultipart("alternative")
+        msg["Subject"] = subject
+        msg["From"] = f"Robin Edwan — ECO Technology <{GMAIL_USER}>"
+        msg["To"] = to
+        msg.attach(MIMEText(body, "plain", "utf-8"))
+
+        with smtplib.SMTP_SSL("smtp.gmail.com", 465) as server:
+            server.login(GMAIL_USER, GMAIL_APP_PASSWORD)
+            server.sendmail(GMAIL_USER, [to], msg.as_string())
+        logging.info(f"Email sent to {to}: {subject}")
+        return True
+    except Exception as e:
+        logging.error(f"Email failed to {to}: {e}")
+        return False
+
+# Alias for backward compatibility
+send_email_via_mcp = send_email_via_smtp
 
 
 def send_client_thankyou(lead: dict):
