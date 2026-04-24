@@ -23,17 +23,18 @@ from fastapi.responses import JSONResponse
 from typing import Optional
 
 # ─── Config ────────────────────────────────────────────────────────────────────
-DB_URL = "postgresql://neondb_owner:npg_y5BACw4WZOqf@ep-super-cake-amzu8ims-pooler.c-5.us-east-1.aws.neon.tech/neondb?sslmode=require"
-INTERNAL_EMAIL = "robenedwan@gmail.com"
+DB_URL = os.environ.get("DATABASE_URL", "postgresql://neondb_owner:npg_y5BACw4WZOqf@ep-super-cake-amzu8ims-pooler.c-5.us-east-1.aws.neon.tech/neondb?sslmode=require")
+INTERNAL_EMAIL = os.environ.get("NOTIFY_EMAIL", "robenedwan@gmail.com")
 COMPANY_NAME = "ECO Technology Environmental Protection Services LLC"
 COMPANY_PHONE = "+971 52 223 3989"
-WEBSITE = "https://binz2008-star.github.io/eco-environmental"
+WEBSITE = os.environ.get("WEBSITE", "https://binz2008-star.github.io/eco-environmental")
 
 # Gmail SMTP config (App Password)
-GMAIL_USER = "robenedwan@gmail.com"
-GMAIL_APP_PASSWORD = "rvyfwpsymfxgxprc"  # ECO Pipeline SMTP app password
+GMAIL_USER = os.environ.get("GMAIL_USER", "robenedwan@gmail.com")
+GMAIL_APP_PASSWORD = os.environ.get("GMAIL_APP_PASSWORD", "rvyfwpsymfxgxprc")
 
-logging.basicConfig(level=logging.INFO, filename="/tmp/webhook.log",
+log_file = "/tmp/webhook.log" if os.path.exists("/tmp") else None
+logging.basicConfig(level=logging.INFO, filename=log_file,
                     format="%(asctime)s %(levelname)s %(message)s")
 
 app = FastAPI(title="ECO Technology Lead Pipeline", version="2.0")
