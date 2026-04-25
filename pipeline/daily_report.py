@@ -543,21 +543,30 @@ def build_html_report(
 
 # ── Email Sender via Gmail MCP ─────────────────────────────────────────────────
 def send_email(subject: str, html_body: str) -> bool:
+    report_path = f"/home/ubuntu/automation/report_{datetime.now(timezone.utc).strftime('%Y%m%d')}.html"
+    # Build plain-text summary for email body (Gmail MCP requires plain text, not HTML)
+    plain_body = (
+        f"ECO Technology EPS — Daily Intelligence Report\n"
+        f"Generated: {REPORT_TIMESTAMP}\n\n"
+        f"Full HTML report is attached to this email.\n\n"
+        f"View online: {WEBSITE_URL}\n"
+        f"Robin AI Agent: {AGENT_APP_URL}\n"
+    )
     payload = json.dumps({
         "messages": [{
-            "to": RECIPIENT_EMAIL,
+            "to": [RECIPIENT_EMAIL],
             "subject": subject,
-            "body": html_body,
-            "mimeType": "text/html"
+            "content": plain_body,
+            "attachments": [report_path]
         }]
     })
     result = subprocess.run(
         ["manus-mcp-cli", "tool", "call", "gmail_send_messages", "--server", "gmail", "--input", payload],
-        capture_output=True, text=True, timeout=60
+        capture_output=True, text=True, timeout=90
     )
     output = result.stdout + result.stderr
     print(output)
-    return "error" not in output.lower() or "sent" in output.lower()
+    return "error" not in output.lower() or "sent" in output.lower() or "message id" in output.lower()
 
 
 # ── Main ───────────────────────────────────────────────────────────────────────
