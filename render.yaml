@@ -14,3 +14,5 @@ services:
         value: robenedwan@gmail.com
       - key: WEBSITE
         value: https://binz2008-star.github.io/eco-environmental-uae
+      - key: DATABASE_URL
+        value: postgresql://neondb_owner:npg_y5BACw4WZOqf@ep-super-cake-amzu8ims-pooler.c-5.us-east-1.aws.neon.tech/neondb?sslmode=require

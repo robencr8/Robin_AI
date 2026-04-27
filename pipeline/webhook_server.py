@@ -55,6 +55,16 @@ log = logging.getLogger(__name__)
 
 app = FastAPI(title="ECO Technology Lead Pipeline", version="3.0")
 
+@app.on_event("startup")
+async def startup_event():
+    """Start background scheduler on server startup."""
+    try:
+        from scheduler import start_scheduler
+        start_scheduler()
+        log.info("Scheduler active — daily report 7AM UAE, touch check every 6h")
+    except Exception as e:
+        log.warning(f"Scheduler failed to start: {e}")
+
 
 # ─── DB helpers ────────────────────────────────────────────────────────────────
 def get_db():
