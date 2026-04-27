@@ -43,7 +43,7 @@ DB_URL = os.environ.get(
 INTERNAL_EMAIL     = os.environ.get("NOTIFY_EMAIL", "robenedwan@gmail.com")
 COMPANY_NAME       = "ECO Technology Environmental Protection Services LLC"
 COMPANY_PHONE      = "+971 52 223 3989"
-WEBSITE            = os.environ.get("WEBSITE", "https://binz2008-star.github.io/eco-environmental")
+WEBSITE            = os.environ.get("WEBSITE", "https://binz2008-star.github.io/eco-environmental-uae")
 GMAIL_USER         = os.environ.get("GMAIL_USER", "robenedwan@gmail.com")
 GMAIL_APP_PASSWORD = os.environ.get("GMAIL_APP_PASSWORD", "rvyfwpsymfxgxprc")
 
