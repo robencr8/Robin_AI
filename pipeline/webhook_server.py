@@ -450,8 +450,11 @@ async def get_hot_leads():
         cur.execute("""
             SELECT id, full_name, company_name, email, phone, emirate,
                    services_required, urgency, status, source,
-                   lead_score, score_band, rag_intent, rag_confidence,
-                   recommended_action, scored_at, created_at
+                   lead_score, score_band, rag_intent,
+                   CAST(rag_confidence AS TEXT) as rag_confidence,
+                   recommended_action,
+                   CAST(scored_at AS TEXT) as scored_at,
+                   CAST(created_at AS TEXT) as created_at
             FROM leads
             WHERE score_band IN ('HOT', 'WARM')
             ORDER BY lead_score DESC NULLS LAST, created_at DESC
@@ -459,6 +462,43 @@ async def get_hot_leads():
         """)
         leads = [dict(r) for r in cur.fetchall()]
         return JSONResponse({"leads": leads, "count": len(leads)})
+    except Exception as e:
+        log.exception("Failed to fetch hot leads")
+        return JSONResponse(
+            status_code=500,
+            content={"error": "Failed to fetch hot leads", "detail": str(e)}
+        )
+    finally:
+        cur.close(); conn.close()
+
+
+@app.get("/leads")
+async def get_all_leads():
+    """Return all leads with scores, sorted by score desc."""
+    conn = get_db(); cur = conn.cursor()
+    try:
+        cur.execute("""
+            SELECT id, full_name, company_name, email, phone, emirate,
+                   services_required, urgency, status, source, email_status,
+                   lead_score, score_band, rag_intent,
+                   CAST(rag_confidence AS TEXT) as rag_confidence,
+                   recommended_action,
+                   touch1_sent, touch2_sent, touch3_sent,
+                   CAST(touch1_sent_at AS TEXT) as touch1_sent_at,
+                   CAST(touch2_sent_at AS TEXT) as touch2_sent_at,
+                   CAST(scored_at AS TEXT) as scored_at,
+                   CAST(created_at AS TEXT) as created_at
+            FROM leads
+            ORDER BY lead_score DESC NULLS LAST, created_at DESC
+        """)
+        leads = [dict(r) for r in cur.fetchall()]
+        return JSONResponse({"leads": leads, "count": len(leads)})
+    except Exception as e:
+        log.exception("Failed to fetch leads")
+        return JSONResponse(
+            status_code=500,
+            content={"error": "Failed to fetch leads", "detail": str(e)}
+        )
     finally:
         cur.close(); conn.close()
 
