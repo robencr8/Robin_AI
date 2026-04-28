@@ -35,6 +35,15 @@ from fastapi import FastAPI, Request, BackgroundTasks
 from fastapi.responses import JSONResponse
 from tenacity import retry, stop_after_attempt, wait_exponential, RetryError
 
+# Phase 2 — RAG intelligence layer (graceful degradation)
+try:
+    from rag_client import classify_lead, generate_proposal_context, forward_to_jotform_agent, rag_health
+    from lead_scorer import score_lead
+    RAG_ENABLED = True
+except ImportError:
+    RAG_ENABLED = False
+    log.warning("RAG client or lead scorer not found — running in basic mode")
+
 # ─── Config ────────────────────────────────────────────────────────────────────
 DB_URL = os.environ.get(
     "DATABASE_URL",
@@ -186,6 +195,82 @@ def update_email_status(lead_id: int, status: str):
         conn.close()
 
 
+# ─── Phase 2: RAG Intelligence + Lead Scoring ─────────────────────────────────
+
+def store_lead_score(lead_id: int, scoring: dict, rag_classification: dict, proposal_context: str | None):
+    """Persist lead score, RAG classification, and proposal context to DB."""
+    conn = get_db(); cur = conn.cursor()
+    try:
+        cur.execute(
+            """UPDATE leads SET
+                lead_score          = %s,
+                score_band          = %s,
+                rag_intent          = %s,
+                rag_confidence      = %s,
+                rag_method          = %s,
+                proposal_context    = %s,
+                recommended_action  = %s,
+                scored_at           = NOW()
+               WHERE id = %s""",
+            (
+                scoring.get("score"),
+                scoring.get("band"),
+                rag_classification.get("intent"),
+                rag_classification.get("confidence"),
+                rag_classification.get("method"),
+                proposal_context,
+                scoring.get("recommended_action"),
+                lead_id,
+            )
+        )
+        conn.commit()
+        log.info(f"Lead #{lead_id} scored: {scoring.get('score')} ({scoring.get('band')})")
+    except Exception as e:
+        log.warning(f"store_lead_score failed (non-critical): {e}")
+        conn.rollback()
+    finally:
+        cur.close(); conn.close()
+
+
+def enrich_lead(lead: dict, lead_id: int, raw_payload: dict | None = None):
+    """
+    Background task: classify via RAG, score, persist.
+    Non-blocking — runs after webhook response is returned.
+    Never raises — all errors are logged.
+    """
+    if not RAG_ENABLED:
+        # Heuristic-only scoring when RAG not available
+        from lead_scorer import score_lead
+        scoring = score_lead(lead)
+        store_lead_score(lead_id, scoring, {"intent": "eco", "rag_available": False}, None)
+        return
+
+    # 1. Classify intent via RAG dispatch
+    rag_classification = classify_lead(lead)
+
+    # 2. Score lead (RAG-enhanced or heuristic fallback)
+    scoring = score_lead(lead, rag_classification)
+
+    # 3. Generate proposal context for HOT/WARM leads
+    proposal_context = None
+    if scoring.get("band") in ("HOT", "WARM"):
+        proposal_context = generate_proposal_context(lead)
+
+    # 4. Forward raw payload to RAG Jotform ingestion for memory indexing
+    if raw_payload:
+        forward_to_jotform_agent(raw_payload)
+
+    # 5. Persist everything
+    store_lead_score(lead_id, scoring, rag_classification, proposal_context)
+
+    # 6. Log hot leads prominently
+    if scoring.get("band") == "HOT":
+        log.warning(
+            f"🔥 HOT LEAD #{lead_id} — {lead.get('company','?')} "
+            f"score={scoring.get('score')} — {scoring.get('recommended_action')}"
+        )
+
+
 # ─── Email layer ───────────────────────────────────────────────────────────────
 @retry(
     stop=stop_after_attempt(3),
@@ -312,7 +397,35 @@ def dispatch_emails(lead: dict, lead_id: int, source: str):
 # ─── Endpoints ─────────────────────────────────────────────────────────────────
 @app.get("/health")
 async def health():
-    return {"status": "ok", "version": "3.0"}
+    rag_status = {}
+    if RAG_ENABLED:
+        try:
+            from rag_client import rag_health
+            rag_status = rag_health()
+        except Exception:
+            rag_status = {"available": False}
+    return {"status": "ok", "version": "3.0", "rag": rag_status}
+
+
+@app.get("/leads/hot")
+async def get_hot_leads():
+    """Return HOT and WARM leads sorted by score descending."""
+    conn = get_db(); cur = conn.cursor()
+    try:
+        cur.execute("""
+            SELECT id, full_name, company_name, email, phone, emirate,
+                   services_required, urgency, status, source,
+                   lead_score, score_band, rag_intent, rag_confidence,
+                   recommended_action, scored_at, created_at
+            FROM leads
+            WHERE score_band IN ('HOT', 'WARM')
+            ORDER BY lead_score DESC NULLS LAST, created_at DESC
+            LIMIT 20
+        """)
+        leads = [dict(r) for r in cur.fetchall()]
+        return JSONResponse({"leads": leads, "count": len(leads)})
+    finally:
+        cur.close(); conn.close()
 
 
 @app.post("/webhook/jotform")
@@ -361,8 +474,9 @@ async def jotform_webhook(request: Request, background_tasks: BackgroundTasks):
 
     # Respond immediately — emails run in background
     background_tasks.add_task(dispatch_emails, lead, lead_id, "Jotform Form Submission")
+    background_tasks.add_task(enrich_lead, lead, lead_id, raw)
 
-    return JSONResponse({"status": "success", "lead_id": lead_id})
+    return JSONResponse({"status": "success", "lead_id": lead_id, "scoring": "pending"})
 
 
 @app.post("/webhook/agent")
@@ -425,8 +539,9 @@ async def agent_webhook(request: Request, background_tasks: BackgroundTasks):
     })
 
     background_tasks.add_task(dispatch_emails, lead, lead_id, "Robin AI Agent")
+    background_tasks.add_task(enrich_lead, lead, lead_id, data)
 
-    return JSONResponse({"status": "success", "lead_id": lead_id})
+    return JSONResponse({"status": "success", "lead_id": lead_id, "scoring": "pending"})
 
 
 @app.get("/leads")

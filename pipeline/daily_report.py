@@ -283,11 +283,37 @@ def build_report(pipeline, leads_today, all_leads, overdue, outreach_stats,
       <td style="padding:8px 12px;text-align:center;font-weight:700;">{r.get("count",0)}</td>
       <td style="padding:8px 12px;text-align:center;color:#64748b;">{f"{int(r.get('count',0))/total*100:.0f}%" if total else "0%"}</td></tr>''')
 
+
+    # Hot/Warm leads scoring section
+    if hot_leads:
+        hot_header = "<table><tr><th>Score</th><th>Band</th><th>Name</th><th>Company</th><th>Email</th><th>Emirate</th><th>RAG Intent</th><th>Action</th></tr>"
+        hot_body = ""
+        for r in hot_leads:
+            bc = "#ef4444" if r.get("score_band") == "HOT" else "#f59e0b"
+            conf = r.get("rag_confidence")
+            cstr = f"{float(conf)*100:.0f}%" if conf else "—"
+            hot_body += (
+                f"<tr style='border-bottom:1px solid #f1f5f9;'>"
+                f"<td style='padding:8px 10px;font-size:18px;font-weight:700;'>{r.get('lead_score','—')}</td>"
+                f"<td style='padding:8px 10px;'><span style='background:{bc};color:#fff;padding:2px 8px;border-radius:12px;font-size:11px;font-weight:700;'>{r.get('score_band','—')}</span></td>"
+                f"<td style='padding:8px 10px;font-weight:600;'>{r.get('full_name','—')}</td>"
+                f"<td style='padding:8px 10px;'>{r.get('company_name','—')}</td>"
+                f"<td style='padding:8px 10px;'>{r.get('email','—')}</td>"
+                f"<td style='padding:8px 10px;'>{r.get('emirate','—')}</td>"
+                f"<td style='padding:8px 10px;font-family:monospace;font-size:11px;'>{r.get('rag_intent','heuristic')}</td>"
+                f"<td style='padding:8px 10px;font-size:11px;color:#64748b;'>{r.get('recommended_action','—')}</td>"
+                f"</tr>"
+            )
+        hot_rows_html = hot_header + hot_body + "</table>"
+    else:
+        hot_rows_html = "<p style='color:#94a3b8;font-size:12px;padding:12px 0;'>No hot leads yet — leads are scored on arrival.</p>"
+
     event_rows = rows(event_summary, lambda r: f'''<tr style="border-bottom:1px solid #f1f5f9;">
       <td style="padding:8px 12px;font-family:monospace;font-size:11px;">{r.get("event_type","—")}</td>
       <td style="padding:8px 12px;text-align:center;font-weight:700;">{r.get("count",0)}</td></tr>''') or \
       '<tr><td colspan="2" style="padding:12px;color:#94a3b8;text-align:center;">No events yet</td></tr>'
 
+    hot_section = hot_rows_html
     return f"""<!DOCTYPE html><html><head><meta charset="UTF-8"><style>
 body{{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;background:#f8fafc;margin:0;padding:0;color:#1e293b}}
 .container{{max-width:960px;margin:0 auto;padding:24px}}
@@ -344,7 +370,9 @@ a{{color:#059669}}
 <tr><td style="padding:10px;font-size:16px;font-weight:700;">{form_stats.get("total") or 0}</td>
 <td style="padding:10px;font-size:16px;font-weight:700;color:#10b981;">{form_stats.get("processed") or 0}</td>
 <td style="padding:10px;font-size:16px;font-weight:700;color:#ef4444;">{form_stats.get("unprocessed") or 0}</td></tr></table></div>
-<div class="section"><h2>⚙️ Event Log</h2>
+<div class="section" style="border-left:4px solid #ef4444;"><h2>🔥 Hot &amp; Warm Leads</h2>{hot_section}</div>
+
+  <div class="section"><h2>⚙️ Event Log</h2>
 <table><tr><th>Event Type</th><th>Count</th></tr>{event_rows}</table></div>
 <div class="footer">ECO Technology EPS — Daily Intelligence Report v3.0 &nbsp;|&nbsp; {REPORT_TIMESTAMP}<br>
 Self-hosted · Direct DB · No external dependencies<br>
@@ -373,6 +401,7 @@ def main():
         form_stats     = fetch_form_submissions(),
         source_breakdown = fetch_source_breakdown(),
         event_summary  = fetch_event_summary(),
+        hot_leads      = fetch_hot_leads(),
     )
 
     overdue_count = len(fetch_overdue_touches())
