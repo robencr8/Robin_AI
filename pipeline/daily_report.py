@@ -21,7 +21,7 @@ import psycopg2.extras
 from tenacity import retry, stop_after_attempt, wait_exponential, RetryError
 
 # ── Config ─────────────────────────────────────────────────────────────────────
-DB_URL             = os.environ.get("DATABASE_URL", "postgresql://neondb_owner:npg_y5BACw4WZOqf@ep-super-cake-amzu8ims-pooler.c-5.us-east-1.aws.neon.tech/neondb?sslmode=require")
+DB_URL             = os.environ.get("DATABASE_URL", "postgresql://neondb_owner:npg_y5BACw4WZOqf@ep-super-cake-amzu8ims.c-5.us-east-1.aws.neon.tech/neondb?sslmode=require")
 GMAIL_USER         = os.environ.get("GMAIL_USER", "robenedwan@gmail.com")
 GMAIL_APP_PASSWORD = os.environ.get("GMAIL_APP_PASSWORD", "rvyfwpsymfxgxprc")
 RECIPIENT_EMAIL    = os.environ.get("NOTIFY_EMAIL", "robenedwan@gmail.com")
@@ -38,26 +38,51 @@ log = logging.getLogger(__name__)
 
 
 # ── DB ─────────────────────────────────────────────────────────────────────────
-def get_db():
-    return psycopg2.connect(DB_URL, cursor_factory=psycopg2.extras.RealDictCursor)
+import time as _time
+
+def get_db(retries=5, delay=3):
+    for attempt in range(retries):
+        try:
+            return psycopg2.connect(DB_URL, cursor_factory=psycopg2.extras.RealDictCursor,
+                                    connect_timeout=10)
+        except Exception as e:
+            if attempt < retries - 1:
+                log.warning(f"DB connect attempt {attempt+1} failed: {e}. Retrying in {delay}s...")
+                _time.sleep(delay)
+            else:
+                raise
 
 def db_query(sql, params=None):
-    conn = get_db(); cur = conn.cursor()
-    try:
-        cur.execute(sql, params or ()); return [dict(r) for r in cur.fetchall()]
-    except Exception as e:
-        log.error(f"DB query failed: {e}"); return []
-    finally:
-        cur.close(); conn.close()
+    for attempt in range(3):
+        try:
+            conn = get_db(); cur = conn.cursor()
+            try:
+                cur.execute(sql, params or ()); return [dict(r) for r in cur.fetchall()]
+            finally:
+                cur.close(); conn.close()
+        except Exception as e:
+            if attempt < 2:
+                log.warning(f"DB query attempt {attempt+1} failed: {e}. Retrying...")
+                _time.sleep(3)
+            else:
+                log.error(f"DB query failed after retries: {e}"); return []
 
 def db_execute(sql, params=None):
-    conn = get_db(); cur = conn.cursor()
-    try:
-        cur.execute(sql, params or ()); conn.commit(); return True
-    except Exception as e:
-        log.error(f"DB execute failed: {e}"); conn.rollback(); return False
-    finally:
-        cur.close(); conn.close()
+    for attempt in range(3):
+        try:
+            conn = get_db(); cur = conn.cursor()
+            try:
+                cur.execute(sql, params or ()); conn.commit(); return True
+            except Exception as e:
+                log.error(f"DB execute failed: {e}"); conn.rollback(); return False
+            finally:
+                cur.close(); conn.close()
+        except Exception as e:
+            if attempt < 2:
+                log.warning(f"DB execute connect attempt {attempt+1} failed: {e}. Retrying...")
+                _time.sleep(3)
+            else:
+                log.error(f"DB execute failed after retries: {e}"); return False
 
 
 # ── Data fetching ──────────────────────────────────────────────────────────────
