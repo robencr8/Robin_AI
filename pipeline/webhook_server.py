@@ -29,6 +29,8 @@ from email.mime.multipart import MIMEMultipart
 from datetime import datetime, timezone
 from typing import Optional
 
+import base64
+import hmac
 import psycopg2
 import psycopg2.extras
 from fastapi import FastAPI, Request, BackgroundTasks
@@ -61,6 +63,83 @@ logging.basicConfig(
     format="%(asctime)s %(levelname)s %(message)s"
 )
 log = logging.getLogger(__name__)
+
+# ── Admin Basic Auth ────────────────────────────────────────────────────────────
+_ADMIN_USERNAME = os.environ.get("ADMIN_USERNAME", "")
+_ADMIN_PASSWORD = os.environ.get("ADMIN_PASSWORD", "")
+
+def _check_basic_auth(request: Request) -> bool:
+    """Validate HTTP Basic Auth credentials from Authorization header."""
+    if not _ADMIN_USERNAME or not _ADMIN_PASSWORD:
+        return False  # Deny if env vars not set
+    auth_header = request.headers.get("Authorization", "")
+    if not auth_header.startswith("Basic "):
+        return False
+    try:
+        decoded = base64.b64decode(auth_header[6:]).decode("utf-8")
+        username, _, password = decoded.partition(":")
+        # Constant-time comparison to prevent timing attacks
+        user_ok = hmac.compare_digest(username, _ADMIN_USERNAME)
+        pass_ok = hmac.compare_digest(password, _ADMIN_PASSWORD)
+        return user_ok and pass_ok
+    except Exception:
+        return False
+
+def _auth_required() -> Response:
+    """Return 401 with WWW-Authenticate header to trigger browser login prompt."""
+    from fastapi.responses import Response as FastAPIResponse
+    return FastAPIResponse(
+        content="Unauthorized",
+        status_code=401,
+        headers={"WWW-Authenticate": 'Basic realm="ECO Admin"'},
+    )
+
+_ADMIN_CSS = """
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;background:#f0f4f8;color:#1e293b;font-size:14px}
+.topbar{background:linear-gradient(135deg,#065f46,#059669);color:#fff;padding:16px 20px;position:sticky;top:0;z-index:100;display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:12px}
+.topbar h1{font-size:16px;font-weight:700;letter-spacing:-.01em}
+.topbar .sub{font-size:11px;opacity:.8;margin-top:2px}
+.filters{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+.filters a{color:#fff;text-decoration:none;font-size:11px;font-weight:600;padding:5px 12px;border-radius:20px;border:1px solid rgba(255,255,255,0.3);white-space:nowrap;transition:background .15s}
+.filters a:hover,.filters a.active{background:rgba(255,255,255,0.25)}
+.kpi-row{display:flex;gap:12px;padding:16px 20px;overflow-x:auto;flex-wrap:wrap}
+.kpi{background:#fff;border-radius:10px;padding:14px 18px;min-width:120px;box-shadow:0 1px 3px rgba(0,0,0,.07);border-left:4px solid #059669;flex:1}
+.kpi .val{font-size:26px;font-weight:800;color:#059669;line-height:1}
+.kpi .lbl{font-size:10px;color:#64748b;margin-top:4px;text-transform:uppercase;letter-spacing:.5px}
+.kpi.hot{border-left-color:#ef4444}.kpi.hot .val{color:#ef4444}
+.kpi.warm{border-left-color:#f59e0b}.kpi.warm .val{color:#f59e0b}
+.kpi.cold{border-left-color:#6b7280}.kpi.cold .val{color:#6b7280}
+.content{padding:0 20px 20px}
+.card{background:#fff;border-radius:10px;margin-bottom:12px;box-shadow:0 1px 3px rgba(0,0,0,.07);overflow:hidden}
+.card-header{padding:14px 16px;border-bottom:1px solid #f1f5f9;display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap}
+.card-company{font-weight:700;font-size:15px;color:#0f172a}
+.card-meta{font-size:11px;color:#64748b;margin-top:2px}
+.card-body{padding:12px 16px;display:grid;grid-template-columns:1fr 1fr;gap:8px}
+.card-field{font-size:12px}
+.card-field .key{color:#94a3b8;font-size:10px;text-transform:uppercase;letter-spacing:.4px;display:block;margin-bottom:2px}
+.card-field .val{color:#334155;font-weight:500}
+.badge{display:inline-block;padding:3px 10px;border-radius:20px;font-size:11px;font-weight:700;color:#fff}
+.badge-HOT{background:#ef4444}
+.badge-WARM{background:#f59e0b}
+.badge-MEDIUM{background:#3b82f6}
+.badge-COLD{background:#6b7280}
+.score-circle{width:44px;height:44px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-weight:800;font-size:14px;color:#fff;flex-shrink:0}
+.score-HOT{background:#ef4444}
+.score-WARM{background:#f59e0b}
+.score-MEDIUM{background:#3b82f6}
+.score-COLD{background:#6b7280}
+.action-box{background:#f0fdf4;border:1px solid #bbf7d0;border-radius:8px;padding:10px 14px;margin:0 16px 14px;font-size:12px;color:#065f46;font-weight:500}
+.empty{text-align:center;padding:48px 20px;color:#94a3b8;font-size:14px}
+@media(max-width:480px){
+  .card-body{grid-template-columns:1fr}
+  .topbar{padding:12px 16px}
+  .kpi-row{padding:12px 16px}
+  .content{padding:0 12px 12px}
+}
+</style>
+"""
 
 app = FastAPI(title="ECO Technology Lead Pipeline", version="3.0")
 
@@ -440,6 +519,157 @@ async def score_lead_endpoint(request: Request):
     except Exception as e:
         log.exception("Lead scoring failed")
         return JSONResponse(status_code=500, content={"error": str(e)})
+
+
+@app.get("/admin")
+async def admin_dashboard(request: Request, band: str = ""):
+    """Password-protected admin dashboard showing scored leads."""
+    if not _check_basic_auth(request):
+        return _auth_required()
+
+    # Check env vars configured
+    if not _ADMIN_USERNAME or not _ADMIN_PASSWORD:
+        return JSONResponse(
+            status_code=503,
+            content={"error": "Admin credentials not configured. Set ADMIN_USERNAME and ADMIN_PASSWORD env vars."}
+        )
+
+    conn = get_db(); cur = conn.cursor()
+    try:
+        band_filter = ""
+        valid_bands = ["HOT", "WARM", "MEDIUM", "COLD"]
+        band_upper = band.upper() if band else ""
+        if band_upper in valid_bands:
+            band_filter = f"AND score_band = '{band_upper}'"
+
+        cur.execute(f"""
+            SELECT id, full_name, company_name, email, phone, emirate,
+                   services_required, urgency, status, source, email_status,
+                   lead_score, score_band, rag_intent,
+                   CAST(rag_confidence AS TEXT) as rag_confidence,
+                   recommended_action,
+                   touch1_sent, touch2_sent, touch3_sent,
+                   CAST(scored_at AS TEXT) as scored_at,
+                   CAST(created_at AS TEXT) as created_at
+            FROM leads
+            WHERE 1=1 {band_filter}
+            ORDER BY lead_score DESC NULLS LAST, created_at DESC
+            LIMIT 100
+        """)
+        leads = [dict(r) for r in cur.fetchall()]
+
+        # KPI counts
+        cur.execute("""
+            SELECT
+                COUNT(*) as total,
+                COUNT(*) FILTER (WHERE score_band='HOT') as hot,
+                COUNT(*) FILTER (WHERE score_band='WARM') as warm,
+                COUNT(*) FILTER (WHERE score_band='MEDIUM') as medium,
+                COUNT(*) FILTER (WHERE score_band='COLD') as cold,
+                COUNT(*) FILTER (WHERE score_band IS NULL) as unscored,
+                COUNT(*) FILTER (WHERE touch1_sent=TRUE) as t1,
+                COUNT(*) FILTER (WHERE touch2_sent=TRUE) as t2,
+                COUNT(*) FILTER (WHERE touch3_sent=TRUE) as t3
+            FROM leads
+        """)
+        kpi = dict(cur.fetchone())
+    except Exception as e:
+        log.exception("Admin dashboard DB error")
+        return JSONResponse(status_code=500, content={"error": str(e)})
+    finally:
+        cur.close(); conn.close()
+
+    from datetime import datetime as dt
+    now = dt.utcnow().strftime("%d %b %Y %H:%M UTC")
+
+    # Filter links
+    def flink(label, b, css_class=""):
+        active = " active" if band_upper == b.upper() or (not band and not b) else ""
+        href = f"/admin?band={b}" if b else "/admin"
+        return f'<a href="{href}" class="{active}">{label}</a>'
+
+    filter_html = (
+        flink("All", "") +
+        flink("🔥 HOT", "HOT") +
+        flink("🟡 WARM", "WARM") +
+        flink("🔵 MEDIUM", "MEDIUM") +
+        flink("⚪ COLD", "COLD")
+    )
+
+    # Lead cards
+    cards_html = ""
+    if not leads:
+        cards_html = '<div class="empty">No leads match this filter.</div>'
+    else:
+        for l in leads:
+            band_val   = l.get("score_band") or "COLD"
+            score_val  = l.get("lead_score") or "—"
+            services   = ", ".join(l.get("services_required") or []) or "—"
+            t1 = "✅" if l.get("touch1_sent") else "—"
+            t2 = "✅" if l.get("touch2_sent") else "—"
+            t3 = "✅" if l.get("touch3_sent") else "—"
+            created    = (l.get("created_at") or "")[:16]
+            scored_at  = (l.get("scored_at") or "")[:16]
+            action     = l.get("recommended_action") or ""
+            action_html = f'<div class="action-box">⚡ {action}</div>' if action else ""
+
+            cards_html += f"""
+<div class="card">
+  <div class="card-header">
+    <div>
+      <div class="card-company">{l.get("company_name","—")}</div>
+      <div class="card-meta">{l.get("full_name","—")} · {l.get("emirate","—")} · {l.get("source","—")}</div>
+    </div>
+    <div style="display:flex;align-items:center;gap:8px;flex-shrink:0">
+      <span class="badge badge-{band_val}">{band_val}</span>
+      <div class="score-circle score-{band_val}">{score_val}</div>
+    </div>
+  </div>
+  <div class="card-body">
+    <div class="card-field"><span class="key">Email</span><span class="val">{l.get("email","—")}</span></div>
+    <div class="card-field"><span class="key">Phone</span><span class="val">{l.get("phone","—")}</span></div>
+    <div class="card-field"><span class="key">Services</span><span class="val">{services}</span></div>
+    <div class="card-field"><span class="key">Urgency</span><span class="val">{l.get("urgency","—")}</span></div>
+    <div class="card-field"><span class="key">Status</span><span class="val">{l.get("status","—")}</span></div>
+    <div class="card-field"><span class="key">Email Status</span><span class="val">{l.get("email_status","—")}</span></div>
+    <div class="card-field"><span class="key">Touches</span><span class="val">T1:{t1} T2:{t2} T3:{t3}</span></div>
+    <div class="card-field"><span class="key">RAG Intent</span><span class="val">{l.get("rag_intent","heuristic")}</span></div>
+    <div class="card-field"><span class="key">Created</span><span class="val">{created}</span></div>
+    <div class="card-field"><span class="key">Scored</span><span class="val">{scored_at}</span></div>
+  </div>
+  {action_html}
+</div>"""
+
+    html = f"""<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>ECO Admin — Lead Pipeline</title>
+{_ADMIN_CSS}
+</head>
+<body>
+<div class="topbar">
+  <div>
+    <div class="h1">🌿 ECO Technology — Lead Pipeline</div>
+    <div class="sub">Generated {now} · Showing {len(leads)} leads</div>
+  </div>
+  <div class="filters">{filter_html}</div>
+</div>
+<div class="kpi-row">
+  <div class="kpi"><div class="val">{kpi.get("total",0)}</div><div class="lbl">Total Leads</div></div>
+  <div class="kpi hot"><div class="val">{kpi.get("hot",0)}</div><div class="lbl">🔥 HOT</div></div>
+  <div class="kpi warm"><div class="val">{kpi.get("warm",0)}</div><div class="lbl">🟡 WARM</div></div>
+  <div class="kpi"><div class="val">{kpi.get("t1",0)}</div><div class="lbl">Touch 1 Sent</div></div>
+  <div class="kpi"><div class="val">{kpi.get("t2",0)}</div><div class="lbl">Touch 2 Sent</div></div>
+  <div class="kpi cold"><div class="val">{kpi.get("unscored",0)}</div><div class="lbl">Unscored</div></div>
+</div>
+<div class="content">{cards_html}</div>
+</body>
+</html>"""
+
+    from fastapi.responses import HTMLResponse
+    return HTMLResponse(content=html)
 
 
 @app.get("/leads/hot")
