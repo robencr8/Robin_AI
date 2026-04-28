@@ -407,6 +407,41 @@ async def health():
     return {"status": "ok", "version": "3.0", "rag": rag_status}
 
 
+@app.post("/api/leads/score")
+async def score_lead_endpoint(request: Request):
+    """Score a lead using the ECO 6-dimension heuristic engine."""
+    try:
+        data = await request.json()
+    except Exception:
+        return JSONResponse(status_code=400, content={"error": "Invalid JSON"})
+
+    try:
+        from lead_scorer import score_lead
+        lead = {
+            "name":    data.get("name", ""),
+            "company": data.get("company", ""),
+            "email":   data.get("email", ""),
+            "service": data.get("service", "") or " ".join(data.get("services", [])),
+            "urgency": data.get("urgency", ""),
+            "emirate": data.get("emirate", ""),
+            "source":  data.get("source", ""),
+        }
+        # Optional: enrich with RAG intent if provided
+        rag_classification = None
+        if data.get("rag_intent"):
+            rag_classification = {
+                "rag_available": True,
+                "intent":     data.get("rag_intent", "eco"),
+                "confidence": float(data.get("rag_confidence", 0.5)),
+                "method":     data.get("rag_method", "external"),
+            }
+        result = score_lead(lead, rag_classification)
+        return JSONResponse(content=result)
+    except Exception as e:
+        log.exception("Lead scoring failed")
+        return JSONResponse(status_code=500, content={"error": str(e)})
+
+
 @app.get("/leads/hot")
 async def get_hot_leads():
     """Return HOT and WARM leads sorted by score descending."""
