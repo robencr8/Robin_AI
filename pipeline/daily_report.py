@@ -97,6 +97,7 @@ fetch_upcoming_posts        = lambda: db_query("SELECT platform, post_type, capt
 fetch_form_submissions      = lambda: (db_query("SELECT COUNT(*) AS total, COUNT(*) FILTER (WHERE lead_id IS NOT NULL) AS processed, COUNT(*) FILTER (WHERE lead_id IS NULL) AS unprocessed FROM form_submissions") or [{}])[0]
 fetch_source_breakdown      = lambda: db_query("SELECT source, COUNT(*) AS count FROM leads GROUP BY source ORDER BY count DESC")
 fetch_event_summary         = lambda: db_query("SELECT event_type, COUNT(*) AS count FROM lead_events GROUP BY event_type ORDER BY count DESC")
+fetch_hot_leads             = lambda: db_query("SELECT id, full_name, company_name, email, emirate, lead_score, score_band, rag_intent, recommended_action FROM leads WHERE score_band IN ('HOT','WARM') AND status NOT IN ('won','lost') ORDER BY lead_score DESC NULLS LAST LIMIT 20")
 
 def fetch_overdue_touches():
     return db_query("""
@@ -210,7 +211,7 @@ tick = lambda v: "✅" if v else "—"
 # ── HTML builder ───────────────────────────────────────────────────────────────
 def build_report(pipeline, leads_today, all_leads, overdue, outreach_stats,
                  recent_outreach, agent_stats, agent_convs, posts, form_stats,
-                 source_breakdown, event_summary):
+                 source_breakdown, event_summary, hot_leads=None):
 
     total      = len(all_leads)
     new_today  = len(leads_today)
